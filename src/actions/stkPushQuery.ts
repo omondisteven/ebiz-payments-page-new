@@ -1,16 +1,18 @@
 "use server";
 
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 
-// interface ErrorResponse {
-//   response?: {
-//     data?: {
-//       errorCode?: string;
-//       errorMessage?: string;
-//     };
-//   };
-//   message?: string;
-// }
+interface ErrorResponse {
+  errorMessage: string;
+  errorCode: string;
+  response?: {
+    data?: {
+      errorCode?: string;
+      errorMessage?: string;
+    };
+  };
+  message?: string;
+}
 
 export const stkPushQuery = async (reqId: string) => {
   const mpesaEnv = process.env.MPESA_ENVIRONMENT;
@@ -56,9 +58,29 @@ export const stkPushQuery = async (reqId: string) => {
 
     return { data: response.data };
   } catch (error) {
-    if (error instanceof Error) {
-      return { error };
+    // Use the ErrorResponse interface to type the error
+    const apiError = error as AxiosError<ErrorResponse>;
+    
+    if (apiError.response) {
+      // Return the structured error response
+      return { 
+        error: {
+          response: {
+            data: {
+              errorCode: apiError.response.data?.errorCode,
+              errorMessage: apiError.response.data?.errorMessage || apiError.message
+            }
+          },
+          message: apiError.message
+        }
+      };
     }
-    return { error: { message: "An unexpected error occurred" } };
+
+    // For non-API errors
+    return { 
+      error: { 
+        message: error instanceof Error ? error.message : "An unexpected error occurred" 
+      } 
+    };
   }
 };
