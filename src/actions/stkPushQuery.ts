@@ -2,15 +2,15 @@
 
 import axios from "axios";
 
-interface ErrorResponse {
-  response?: {
-    data?: {
-      errorCode?: string;
-      errorMessage?: string;
-    };
-  };
-  message?: string;
-}
+// interface ErrorResponse {
+//   response?: {
+//     data?: {
+//       errorCode?: string;
+//       errorMessage?: string;
+//     };
+//   };
+//   message?: string;
+// }
 
 export const stkPushQuery = async (reqId: string) => {
   const mpesaEnv = process.env.MPESA_ENVIRONMENT;
