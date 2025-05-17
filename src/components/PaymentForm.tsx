@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { sendStkPush } from "@/actions/stkPush";
 import { stkPushQuery } from "@/actions/stkPushQuery";
 import PaymentSuccess from "./Success";
@@ -14,6 +14,11 @@ interface DataFromForm {
   mpesa_phone: string;
   name: string;
   amount: number;
+}
+
+interface QrData {
+  TransactionType: string;
+  Amount?: number;
 }
 
 const Calculator = ({ 
@@ -33,7 +38,6 @@ const Calculator = ({
       if (input) {
         const sanitizedInput = input.replace(/[+\-*/]+$/, '');
         if (sanitizedInput) {
-          // eslint-disable-next-line no-eval
           const result = eval(sanitizedInput);
           setLiveResult(result.toString());
         } else {
@@ -42,7 +46,7 @@ const Calculator = ({
       } else {
         setLiveResult('0');
       }
-    } catch (error) {
+    } catch {
       setLiveResult('Error');
     }
   }, [input]);
@@ -116,22 +120,18 @@ const Calculator = ({
 
 function PaymentForm() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const [dataFromForm, setDataFromForm] = useState<DataFromForm>({
     mpesa_phone: "",
     name: "",
     amount: 0,
   });
 
-  const [loading, setLoading] = useState<boolean>(false);
-  const [success, setSuccess] = useState<boolean>(false);
-  const [stkQueryLoading, setStkQueryLoading] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [stkQueryLoading, setStkQueryLoading] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [transactionType, setTransactionType] = useState("");
-  const [qrData, setQrData] = useState<any>({});
 
-  // QR code data processing
   useEffect(() => {
     const qrDataParam = searchParams.get('data');
     if (qrDataParam) {
@@ -140,26 +140,22 @@ function PaymentForm() {
         
         try {
           decodedData = decodeURIComponent(escape(atob(qrDataParam)));
-        } catch (base64Err) {
-          console.warn("Base64 decode failed, trying URI decode");
+        } catch {
           decodedData = decodeURIComponent(qrDataParam);
         }
 
-        let parsedData = JSON.parse(decodedData);
+        const parsedData: QrData = JSON.parse(decodedData);
         if (!parsedData.TransactionType) {
           toast.error("Missing transaction type in QR data");
           return;
         }
 
         setTransactionType(parsedData.TransactionType);
-        setQrData(parsedData);
         setDataFromForm(prev => ({
           ...prev,
           amount: parsedData.Amount || 0
         }));
-
-      } catch (e) {
-        console.error("Error processing QR code data:", e);
+      } catch {
         toast.error("Failed to process QR code");
       }
     }
@@ -168,7 +164,6 @@ function PaymentForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setErrorMessage("");
 
     const formData = {
       mpesa_number: dataFromForm.mpesa_phone.trim(),
@@ -184,176 +179,139 @@ function PaymentForm() {
       return alert("Invalid Mpesa number format.");
     }
 
-    const { data: stkData, error: stkError } = await sendStkPush(formData);
+    const { data: stkData, error: stkError } = await sendStkPush({
+      mpesa_number: formData.mpesa_number,
+      amount: formData.amount
+    });
 
     if (stkError) {
       setLoading(false);
       return alert(stkError);
     }
 
-    const checkoutRequestId = stkData.CheckoutRequestID;
-
     setStkQueryLoading(true);
-    stkPushQueryWithIntervals(checkoutRequestId);
+    stkPushQueryWithIntervals(stkData.CheckoutRequestID);
   };
 
-  const stkPushQueryWithIntervals = (CheckoutRequestID: string) => {
-    let reqcount = 0;
-
+  const stkPushQueryWithIntervals = (checkoutRequestId: string) => {
+    let reqCount = 0;
     const timer = setInterval(async () => {
-      reqcount += 1;
+      reqCount += 1;
 
-      if (reqcount === 15) {
+      if (reqCount === 15) {
         clearInterval(timer);
         setStkQueryLoading(false);
         setLoading(false);
-        setErrorMessage("You took too long to complete the payment.");
-        alert("You took too long to complete the payment.");
+        alert("Payment timed out");
         return;
       }
 
       try {
-        const { data, error } = await stkPushQuery(CheckoutRequestID);
+        const { data, error } = await stkPushQuery(checkoutRequestId);
 
         if (error) {
-          // Type assertion for the error object
-          const apiError = error as {
-            response?: {
-              data?: {
-                errorCode?: string;
-                errorMessage?: string;
-              };
-            };
-            message?: string;
-          };
-
-          const errCode = apiError?.response?.data?.errorCode;
-          const errMsg = apiError?.response?.data?.errorMessage || 
-                        apiError?.message || 
-                        "An error occurred";
-
-          if (errCode && errCode !== "500.001.1001") {
-            clearInterval(timer);
-            setStkQueryLoading(false);
-            setLoading(false);
-            setErrorMessage(errMsg);
-            alert(errMsg);
-          }
+          clearInterval(timer);
+          setStkQueryLoading(false);
+          setLoading(false);
+          alert(error.message || "Payment failed");
           return;
         }
 
-        if (data) {
-          if (data.ResultCode === "0") {
-            clearInterval(timer);
-            setStkQueryLoading(false);
-            setLoading(false);
-            setSuccess(true);
-          } else {
-            clearInterval(timer);
-            setStkQueryLoading(false);
-            setLoading(false);
-            setErrorMessage(data?.ResultDesc || "Payment failed.");
-            alert(data?.ResultDesc || "Payment failed.");
-          }
+        if (data?.ResultCode === "0") {
+          clearInterval(timer);
+          setStkQueryLoading(false);
+          setLoading(false);
+          setSuccess(true);
+        } else {
+          clearInterval(timer);
+          setStkQueryLoading(false);
+          setLoading(false);
+          alert(data?.ResultDesc || "Payment failed");
         }
-      } catch (untypedError) {
-        const error = untypedError as { message?: string };
+      } catch {
         clearInterval(timer);
         setStkQueryLoading(false);
         setLoading(false);
-        setErrorMessage(error?.message || "An unexpected error occurred");
-        alert(error?.message || "An unexpected error occurred");
+        alert("An unexpected error occurred");
       }
     }, 2000);
   };
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 items-center">
-      <div className="w-full md:w-full lg:w-full xl:w-full 2xl:w-full flex flex-col flex-grow max-w-2xl">
-        
-        <div className="p-4 border-b border-gray-200 bg-white shadow-sm rounded-t-lg w-full px-4 mt-2">
-          <h2 className="text-xl font-bold text-center" style={{ color: "#3CB371" }}>
-            M-PESA PAYMENT PROMPT
+      <div className="w-full max-w-md p-4">
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <h2 className="text-xl font-bold text-center text-green-600 mb-4">
+            M-PESA PAYMENT
           </h2>
-        </div>
-
-        <div className="flex-1 p-4 overflow-auto w-full px-4">
+          
           {stkQueryLoading ? (
             <STKPushQueryLoading number={dataFromForm.mpesa_phone} />
           ) : success ? (
             <PaymentSuccess />
           ) : (
-            <div className="bg-white rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.15)] p-4 mb-4 border border-gray-200 w-full">
-              <div className="text-center">
-                <p className="text-lg mb-4 text-center">
-                  {transactionType ? (
-                    <>You are about to perform a <strong>{transactionType}</strong> transaction.</>
-                  ) : (
-                    <>Provide your details to process the payment.</>
-                  )}
-                </p>
-              </div>
-              <hr />
-              <br />
-
+            <>
+              <p className="text-center mb-4">
+                {transactionType ? (
+                  <>Transaction: <strong>{transactionType}</strong></>
+                ) : (
+                  "Enter payment details"
+                )}
+              </p>
+              
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-bold">Name</label>
+                  <label className="block mb-1 font-medium">Name</label>
                   <input
                     type="text"
                     required
-                    name="name"
                     value={dataFromForm.name}
-                    onChange={(e) =>
-                      setDataFromForm({ ...dataFromForm, name: e.target.value })
-                    }
-                    placeholder="John Doe"
-                    className="block w-full rounded-md border border-gray-200 bg-white px-4 py-4 text-black placeholder-gray-500 caret-orange-500 transition-all duration-200 focus:border-orange-500 focus:outline-none focus:ring-orange-500"
+                    onChange={(e) => setDataFromForm({...dataFromForm, name: e.target.value})}
+                    placeholder="Your name"
+                    className="w-full p-3 border rounded"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-bold">Mpesa Number</label>
+                  <label className="block mb-1 font-medium">Mpesa Number</label>
                   <input
                     type="text"
-                    name="mpesa_phone"
                     required
                     value={dataFromForm.mpesa_phone}
-                    onChange={(e) =>
-                      setDataFromForm({ ...dataFromForm, mpesa_phone: e.target.value })
-                    }
+                    onChange={(e) => setDataFromForm({...dataFromForm, mpesa_phone: e.target.value})}
                     placeholder="07XXXXXXXX"
-                    className="block w-full rounded-md border border-gray-200 bg-white px-4 py-4 text-black placeholder-gray-500 caret-orange-500 transition-all duration-200 focus:border-orange-500 focus:outline-none focus:ring-orange-500"
+                    className="w-full p-3 border rounded"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-bold">Amount</label>
+                  <label className="block mb-1 font-medium">Amount</label>
                   <div className="relative">
                     <input
                       type="number"
                       required
-                      name="amount"
                       min={1}
                       value={dataFromForm.amount || ""}
-                      onChange={(e) =>
-                        setDataFromForm({ ...dataFromForm, amount: Number(e.target.value) })
-                      }
-                      placeholder="Enter amount"
-                      className="block w-full rounded-md border border-gray-200 bg-white px-4 py-4 text-black placeholder-gray-500 caret-orange-500 transition-all duration-200 focus:border-orange-500 focus:outline-none focus:ring-orange-500"
+                      onChange={(e) => setDataFromForm({...dataFromForm, amount: Number(e.target.value)})}
+                      placeholder="Amount"
+                      className="w-full p-3 border rounded pr-10"
                     />
-                    <button 
+                    <button
+                      type="button"
                       onClick={() => setShowCalculator(true)}
-                      className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 p-1"
+                      className="absolute right-2 top-1/2 transform -translate-y-1/2"
                     >
-                      <HiCalculator className="h-5 w-5" />
+                      <HiCalculator className="h-5 w-5 text-gray-500" />
                     </button>
                   </div>
                   {showCalculator && (
-                    <Calculator 
-                      onCalculate={(result) => setDataFromForm({ ...dataFromForm, amount: Number(result) })} 
+                    <Calculator
+                      onCalculate={(result) => {
+                        setDataFromForm({...dataFromForm, amount: Number(result)});
+                        setShowCalculator(false);
+                      }}
                       onClose={() => setShowCalculator(false)}
-                      onClear={() => setDataFromForm({ ...dataFromForm, amount: 0 })}
+                      onClear={() => setDataFromForm({...dataFromForm, amount: 0})}
                     />
                   )}
                 </div>
@@ -361,41 +319,31 @@ function PaymentForm() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="inline-flex w-full items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-4 text-base font-semibold text-white transition-all duration-200 hover:bg-green-700 focus:bg-green-700 focus:outline-none"
+                  className={`w-full p-3 rounded-md text-white font-medium ${
+                    loading ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
+                  }`}
                 >
-                  <HiOutlineCreditCard className="mr-2" />
-                  {loading ? "Processing..." : "Proceed With Payment"}
+                  {loading ? "Processing..." : (
+                    <>
+                      <HiOutlineCreditCard className="inline mr-2" />
+                      Proceed with Payment
+                    </>
+                  )}
                 </button>
               </form>
-            </div>
+            </>
           )}
         </div>
 
-        <div className="p-4 border-t border-gray-200 bg-white shadow-sm rounded-b-lg w-full px-4 mb-2">
-          <button
-            className="font-bold w-full bg-gray-700 text-white py-3 rounded-md shadow-md flex items-center justify-center"
-            onClick={() => window.location.href = "/"}
-          >
-            <HiX className="mr-2" />
-            Cancel
-          </button>
-        </div>
-
-        <div className="py-4 text-center text-sm text-gray-500 w-full">
+        <div className="mt-4 text-center text-sm text-gray-500">
           Powered by{' '}
-          <Link 
-            href="https://www.bltasolutions.co.ke" 
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-green-600 hover:text-green-800 hover:underline"
-          >
+          <Link href="https://www.bltasolutions.co.ke" className="text-green-600 hover:underline">
             BLTA Solutions
           </Link>
         </div>
       </div>
     </div>
   );
-
 }
 
 export default PaymentForm;

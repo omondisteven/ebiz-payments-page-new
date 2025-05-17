@@ -1,7 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Accept context to access params
-export async function POST(request: NextRequest, context: { params: { securityKey: string } }) {
+interface CallbackItem {
+  Name: string;
+  Value: string | number;
+}
+
+interface CallbackMetadata {
+  Item: CallbackItem[];
+}
+
+interface StkCallback {
+  CallbackMetadata?: CallbackMetadata;
+  ResultDesc?: string;
+}
+
+interface CallbackData {
+  Body: {
+    stkCallback: StkCallback;
+  };
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: { securityKey: string } }
+) {
   const clientIp =
     request.headers.get("x-forwarded-for") || request.headers.get("remote-addr");
 
@@ -21,35 +43,32 @@ export async function POST(request: NextRequest, context: { params: { securityKe
   ];
 
   if (!clientIp || !whitelist.includes(clientIp)) {
-    return NextResponse.json({ error: "IP not whitelisted" }, { status: 403 });
+    return NextResponse.json(
+      { error: "IP not whitelisted" },
+      { status: 403 }
+    );
   }
 
-  const data = await request.json();
-  const { securityKey } = context.params;
-
-  if (securityKey !== process.env.MPESA_CALLBACK_SECRET_KEY) {
-    return NextResponse.json("ok saf");
+  if (context.params.securityKey !== process.env.MPESA_CALLBACK_SECRET_KEY) {
+    return NextResponse.json("Unauthorized", { status: 401 });
   }
+
+  const data = (await request.json()) as CallbackData;
 
   if (!data.Body.stkCallback.CallbackMetadata) {
     console.log(data.Body.stkCallback.ResultDesc);
-    return NextResponse.json("ok saf");
+    return NextResponse.json("OK", { status: 200 });
   }
 
-  const body = data.Body.stkCallback.CallbackMetadata;
-
-  const amountObj = body.Item.find((obj: any) => obj.Name === "Amount");
-  const codeObj = body.Item.find((obj: any) => obj.Name === "MpesaReceiptNumber");
-  const phoneNumberObj = body.Item.find((obj: any) => obj.Name === "PhoneNumber");
-
-  const amount = amountObj?.Value;
-  const mpesaCode = codeObj?.Value;
-  const phoneNumber = phoneNumberObj?.Value?.toString();
+  const metadata = data.Body.stkCallback.CallbackMetadata;
+  const amount = metadata.Item.find((item) => item.Name === "Amount")?.Value;
+  const mpesaCode = metadata.Item.find((item) => item.Name === "MpesaReceiptNumber")?.Value;
+  const phoneNumber = metadata.Item.find((item) => item.Name === "PhoneNumber")?.Value?.toString();
 
   try {
     console.log({ amount, mpesaCode, phoneNumber });
-    return NextResponse.json("ok", { status: 200 });
-  } catch (error: any) {
-    return NextResponse.json("ok");
+    return NextResponse.json("OK", { status: 200 });
+  } catch {
+    return NextResponse.json("OK", { status: 200 });
   }
 }
